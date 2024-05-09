@@ -29,7 +29,10 @@ from finetune.run_classifier import build_optimizer, load_or_initialize_paramete
 class MachineReadingComprehension(nn.Module):
     def __init__(self, args):
         super(MachineReadingComprehension, self).__init__()
-        self.embedding = str2embedding[args.embedding](args, len(args.tokenizer.vocab))
+        self.embedding = Embedding(args)
+        for embedding_name in args.embedding:
+            tmp_emb = str2embedding[embedding_name](args, len(args.tokenizer.vocab))
+            self.embedding.update(tmp_emb, embedding_name)
         self.encoder = str2encoder[args.encoder](args)
         self.output_layer = nn.Linear(args.hidden_size, 2)
 
@@ -113,10 +116,10 @@ def convert_examples_to_dataset(args, examples):
             src_b = args.tokenizer.convert_tokens_to_ids(args.tokenizer.tokenize(span_context) + [SEP_TOKEN])
             src = src_a + src_b
             seg = [1] * len(src_a) + [2] * len(src_b)
-            PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
-            while len(src) < args.seq_length:
-                src.append(PAD_ID)
-                seg.append(0)
+            if len(src) < args.seq_length:
+                PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
+                src += [PAD_ID] * (args.seq_length - len(src))
+                seg += [0] * (args.seq_length - len(seg))
 
             dataset.append((src, seg, start_position, end_position, answers, question_id, len(question), doc_span_index, start_offset))
     return dataset
@@ -156,11 +159,7 @@ def train(args, model, optimizer, scheduler, src_batch, seg_batch, start_positio
     if torch.cuda.device_count() > 1:
         loss = torch.mean(loss)
 
-    if args.fp16:
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-    else:
-        loss.backward()
+    loss.backward()
 
     optimizer.step()
     scheduler.step()
@@ -390,13 +389,6 @@ def main():
     args.logger.info("The number of training instances: {}".format(instances_num))
 
     optimizer, scheduler = build_optimizer(args, model)
-
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-        model, optimizer = amp.initialize(model, optimizer,opt_level=args.fp16_opt_level)
 
     if torch.cuda.device_count() > 1:
         args.logger.info("{} GPUs are available. Let's use them.".format(torch.cuda.device_count()))

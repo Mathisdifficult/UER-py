@@ -30,7 +30,10 @@ from finetune.run_classifier import build_optimizer, load_or_initialize_paramete
 class NerTagger(nn.Module):
     def __init__(self, args):
         super(NerTagger, self).__init__()
-        self.embedding = str2embedding[args.embedding](args, len(args.tokenizer.vocab))
+        self.embedding = Embedding(args)
+        for embedding_name in args.embedding:
+            tmp_emb = str2embedding[embedding_name](args, len(args.tokenizer.vocab))
+            self.embedding.update(tmp_emb, embedding_name)
         self.encoder = str2encoder[args.encoder](args)
         self.labels_num = args.labels_num
         self.output_layer = nn.Linear(args.hidden_size, self.labels_num)
@@ -107,11 +110,11 @@ def read_dataset(args, path):
                 src = src[: args.seq_length]
                 tgt = tgt[: args.seq_length]
                 seg = seg[: args.seq_length]
-            PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
-            while len(src) < args.seq_length:
-                src.append(PAD_ID)
-                tgt.append(args.labels_num - 1)
-                seg.append(0)
+            if len(src) < args.seq_length:
+                PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
+                src += [PAD_ID] * (args.seq_length - len(src))
+                tgt += [args.labels_num - 1] * (args.seq_length - len(tgt))
+                seg += [0] * (args.seq_length - len(seg))
             dataset.append([src, tgt, seg])
 
     return dataset
@@ -142,11 +145,7 @@ def train(args, model, optimizer, scheduler, src_batch, tgt_batch, seg_batch):
     if torch.cuda.device_count() > 1:
         loss = torch.mean(loss)
 
-    if args.fp16:
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-    else:
-        loss.backward()
+    loss.backward()
 
     optimizer.step()
     scheduler.step()
@@ -284,13 +283,6 @@ def main():
     args.logger.info("The number of training instances: {}".format(instances_num))
 
     optimizer, scheduler = build_optimizer(args, model)
-
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-        model, optimizer = amp.initialize(model, optimizer, opt_level = args.fp16_opt_level)
 
     if torch.cuda.device_count() > 1:
         args.logger.info("{} GPUs are available. Let's use them.".format(torch.cuda.device_count()))

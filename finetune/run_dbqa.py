@@ -41,10 +41,10 @@ def read_dataset(args, path):
             if len(src) > args.seq_length:
                 src = src[: args.seq_length]
                 seg = seg[: args.seq_length]
-            PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
-            while len(src) < args.seq_length:
-                src.append(PAD_ID)
-                seg.append(0)
+            if len(src) < args.seq_length:
+                PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
+                src += [PAD_ID] * (args.seq_length - len(src))
+                seg += [0] * (args.seq_length - len(seg))
             dataset.append((src, tgt, seg, qid))
 
     return dataset
@@ -178,14 +178,6 @@ def main():
     args.logger.info("The number of training instances: {}".format(instances_num))
 
     optimizer, scheduler = build_optimizer(args, model)
-
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-        model, optimizer = amp.initialize(model, optimizer,opt_level = args.fp16_opt_level)
-        args.amp = amp
 
     if torch.cuda.device_count() > 1:
         args.logger.info("{} GPUs are available. Let's use them.".format(torch.cuda.device_count()))

@@ -31,7 +31,10 @@ from finetune.run_classifier import count_labels_num, build_optimizer
 class SiameseClassifier(nn.Module):
     def __init__(self, args):
         super(SiameseClassifier, self).__init__()
-        self.embedding = DualEmbedding(args, len(args.tokenizer.vocab))
+        self.embedding = Embedding(args)
+        for embedding_name in args.embedding:
+            tmp_emb = str2embedding[embedding_name](args, len(args.tokenizer.vocab))
+            self.embedding.update(tmp_emb, embedding_name)
         self.encoder = DualEncoder(args)
 
         self.classifier = nn.Linear(4 * args.stream_0["hidden_size"], args.labels_num)
@@ -178,11 +181,7 @@ def train_model(args, model, optimizer, scheduler, src_batch, tgt_batch, seg_bat
     if torch.cuda.device_count() > 1:
         loss = torch.mean(loss)
 
-    if args.fp16:
-        with args.amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-    else:
-        loss.backward()
+    loss.backward()
 
     optimizer.step()
     scheduler.step()
@@ -284,14 +283,6 @@ def main():
     args.logger.info("The number of training instances: {}".format(instances_num))
 
     optimizer, scheduler = build_optimizer(args, model)
-
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16_opt_level)
-        args.amp = amp
 
     if torch.cuda.device_count() > 1:
         args.logger.info("{} GPUs are available. Let's use them.".format(torch.cuda.device_count()))

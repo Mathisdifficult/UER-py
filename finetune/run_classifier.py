@@ -28,7 +28,10 @@ from uer.opts import finetune_opts, tokenizer_opts, adv_opts
 class Classifier(nn.Module):
     def __init__(self, args):
         super(Classifier, self).__init__()
-        self.embedding = str2embedding[args.embedding](args, len(args.tokenizer.vocab))
+        self.embedding = Embedding(args)
+        for embedding_name in args.embedding:
+            tmp_emb = str2embedding[embedding_name](args, len(args.tokenizer.vocab))
+            self.embedding.update(tmp_emb, embedding_name)
         self.encoder = str2encoder[args.encoder](args)
         self.labels_num = args.labels_num
         self.pooling_type = args.pooling
@@ -157,10 +160,10 @@ def read_dataset(args, path):
             if len(src) > args.seq_length:
                 src = src[: args.seq_length]
                 seg = seg[: args.seq_length]
-            PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
-            while len(src) < args.seq_length:
-                src.append(PAD_ID)
-                seg.append(0)
+            if len(src) < args.seq_length:
+                PAD_ID = args.tokenizer.convert_tokens_to_ids([PAD_TOKEN])[0]
+                src += [PAD_ID] * (args.seq_length - len(src))
+                seg += [0] * (args.seq_length - len(seg))
             if args.soft_targets and "logits" in columns.keys():
                 dataset.append((src, tgt, seg, soft_tgt))
             else:
@@ -182,11 +185,7 @@ def train_model(args, model, optimizer, scheduler, src_batch, tgt_batch, seg_bat
     if torch.cuda.device_count() > 1:
         loss = torch.mean(loss)
 
-    if args.fp16:
-        with args.amp.scale_loss(loss, optimizer) as scaled_loss:
-            scaled_loss.backward()
-    else:
-        loss.backward()
+    loss.backward()
 
     if args.use_adv and args.adv_type == "fgm":
         args.adv_method.attack(epsilon=args.fgm_epsilon)
@@ -306,14 +305,6 @@ def main():
     args.logger.info("Batch size: {}".format(batch_size))
     args.logger.info("The number of training instances: {}".format(instances_num))
     optimizer, scheduler = build_optimizer(args, model)
-
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16_opt_level)
-        args.amp = amp
 
     if torch.cuda.device_count() > 1:
         args.logger.info("{} GPUs are available. Let's use them.".format(torch.cuda.device_count()))
